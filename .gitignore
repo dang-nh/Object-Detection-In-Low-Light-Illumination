@@ -113,7 +113,7 @@ pretrained_weights/*
 
 # Data
 checkpoints/*
-test.ipynb
+# test.ipynb
 create_label.ipynb
 data/anno
 data/dataset
@@ -124,3 +124,7 @@ YOLOv3_Low_Light_Object_Detection
 YOLOv3-detection-from-scratch
 YOLOv3-PyTorch
 wandb
+Dataset
+anno.zip
+Dataset.zip
+test.txt
