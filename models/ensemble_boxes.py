@@ -1,9 +1,10 @@
-from ensemble_boxes import *
+from ensemble_boxes import weighted_boxes_fusion
+import numpy as np
 
 #device = torch.device('cuda:0')
 
 
-def make_ensemble_predictions(images, model):
+def make_ensemble_predictions(images, model, device=None):
     models = [model]
     images = list(image.to(device) for image in images)
     result = []
@@ -14,7 +15,7 @@ def make_ensemble_predictions(images, model):
     return result
 
 
-def run_wbf(predictions, image_index, image_size=1024, iou_thr=0.55, skip_box_thr=0.5, weights=None, model=None):
+def run_wbf(predictions, image_index, image_size=224, iou_thr=0.5, skip_box_thr=0.5, weights=None, model=None, device=None):
     models = [model]
     boxes = [prediction[image_index]['boxes'].data.cpu().numpy()/(image_size-1)
              for prediction in predictions]

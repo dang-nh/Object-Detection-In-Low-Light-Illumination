@@ -19,7 +19,7 @@ class AverageMeter(object):
     def reset(self):
         self.current_total = 0.0
         self.iterations = 0.0
-
+        
 
 
 iou_thresholds = [0.5]
