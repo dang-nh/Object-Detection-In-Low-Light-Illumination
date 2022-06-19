@@ -7,14 +7,6 @@ import numpy as np
 from albumentations.pytorch.transforms import ToTensorV2
 
 
-def gammaCorrection(src, gamma):
-    invGamma = 1 / gamma
-
-    table = [((i / 255) ** invGamma) * 255 for i in range(256)]
-    table = np.array(table, np.uint8)
-
-    return cv2.LUT(src, table)
-
 class ExDarkDataset(torch.utils.data.Dataset):
     def __init__(self, dataframe, image_dir, transforms):
         super().__init__()
@@ -32,18 +24,15 @@ class ExDarkDataset(torch.utils.data.Dataset):
         # Read image
         img_path = self.img_paths[idx]
         img = cv2.imread(os.path.join(self.image_dir, img_path))
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        gamma = 2.5
-        img = gammaCorrection(img, gamma=gamma)
-        img = img.astype(np.float32)
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB).astype(np.float32)
         img /= 255.0
         records = self.dataframe[self.dataframe['image_path'] == img_path]
 
         boxes = records[["x_tl", "y_tl", "x_br", "y_br"]].values
-        # boxes[:, 2] = boxes[:, 2] - boxes[:, 0]
-        # boxes[:, 3] = boxes[:, 3] - boxes[:, 1]
-        # img_width, img_height = records[[
-        #     "image_width", "image_height"]].values[0]
+        boxes[:, 2] = boxes[:, 2] - boxes[:, 0]
+        boxes[:, 3] = boxes[:, 3] - boxes[:, 1]
+        img_width, img_height = records[[
+            "image_width", "image_height"]].values[0]
 
         boxes = torch.as_tensor(boxes, dtype=torch.float32)
 
@@ -70,13 +59,10 @@ class ExDarkDataset(torch.utils.data.Dataset):
             }
             sample = self.transforms(**sample)
             img = sample['image']
-            try:
-                target['boxes'] = torch.stack(
-                    tuple(map(torch.tensor, zip(*sample['bboxes'])))).permute(1, 0)
-            except:
-                print(f"img path error is {img_path}")
+            target['boxes'] = torch.stack(
+                tuple(map(torch.tensor, zip(*sample['bboxes'])))).permute(1, 0)
 
-        return img, target
+        return img, target, img_path
 
 
 def get_transforms(mode):
@@ -88,11 +74,11 @@ def get_transforms(mode):
             A.ShiftScaleRotate(p=0.5),
             # A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
             ToTensorV2(p=1.0)
-        ], bbox_params={'format': 'pascal_voc', 'label_fields': ['labels']})
+        ], bbox_params={'format': 'coco', 'label_fields': ['labels']})
     else:
         transform = A.Compose([
             # A.Resize(224, 224, always_apply=True),
             # A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
             ToTensorV2(p=1.0)
-        ], bbox_params={'format': 'pascal_voc', 'label_fields': ['labels']})
+        ], bbox_params={'format': 'coco', 'label_fields': ['labels']})
     return transform

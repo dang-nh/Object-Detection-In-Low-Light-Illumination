@@ -1,0 +1,8 @@
+albumentations==1.1.0
+opencv-python==4.5.4.60
+pandas
+numpy
+scikit-learn
+sklearn
+matplotlib
+yaml

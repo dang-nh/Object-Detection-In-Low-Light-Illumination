@@ -129,3 +129,6 @@ Dataset
 anno.zip
 Dataset.zip
 test.txt
+cocoapi
+vision
+checkpoints

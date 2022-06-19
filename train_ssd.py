@@ -1,11 +1,10 @@
-from albumentations.core.serialization import load
-from utils import build_loaders, split_dataset, option, load_config
+from utils import build_loaders, AverageMeter, EvalMeter, split_dataset
 import pandas as pd
 import numpy as np
 import yaml
 import torch
 from tqdm import tqdm
-from models import FasterRCNN
+from models import SSD
 # from vision.references.detection.engine import evaluate
 import math
 import sys
@@ -17,10 +16,8 @@ from utils.utils import MetricLogger, SmoothedValue, reduce_dict
 from utils.coco_eval import CocoEvaluator
 from utils.coco_utils import get_coco_api_from_dataset
 
-IMAGE_DIR = 'Dataset'
-ANNOTATION_PATH = 'data/annotations.csv'
 
-def train(model, optimizer, data_loader, device, epoch, print_freq, scaler=None, args=None):    
+def train(model, optimizer, data_loader, device, epoch, print_freq, scaler=None):
     model.train()
 
     metric_logger = MetricLogger(delimiter="  ")
@@ -41,6 +38,7 @@ def train(model, optimizer, data_loader, device, epoch, print_freq, scaler=None,
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
         with torch.cuda.amp.autocast(enabled=scaler is not None):
             loss_dict = model(images, targets)
+            print("loss_dict:", loss_dict)
             losses = sum(loss for loss in loss_dict.values())
 
         # reduce losses over all GPUs for logging purposes
@@ -50,6 +48,7 @@ def train(model, optimizer, data_loader, device, epoch, print_freq, scaler=None,
         loss_value = losses_reduced.item()
 
         if not math.isfinite(loss_value):
+            print(f"image error is {targets}")
             print(f"Loss is {loss_value}, stopping training")
             print(loss_dict_reduced)
             sys.exit(1)
@@ -72,7 +71,7 @@ def train(model, optimizer, data_loader, device, epoch, print_freq, scaler=None,
         if epoch % 2 ==0:
             state = {'epoch': epoch, 'state_dict': model.state_dict(),
                 'optimizer': optimizer.state_dict(), 'losslogger': metric_logger}
-            torch.save(state, f"checkpoints/latest_{args.model_name}.pth")
+            torch.save(state, 'checkpoints/latest.pth')
 
     return metric_logger
 
@@ -131,47 +130,45 @@ def evaluate(model, data_loader, device):
     return sum(res) / len(res)
 
 
-def main(args, config):
-
-    device = torch.device("cuda:" + str(args.gpu)
+def main():
+    device = torch.device("cuda:0"
                           if torch.cuda.is_available() else "cpu")
-    torch.cuda.set_device(args.gpu)
+    torch.cuda.set_device(device)
 
     print(f">>>> Torch device is {torch.cuda.current_device()}")
     print(f">>>> Preparing data....")
 
-    batch_size = args.batch_size
-
-    data = pd.read_csv(ANNOTATION_PATH)
-    train_df, test_df = split_dataset(data, args.train_size)
+    batch_size = 8
+    image_dir = 'Dataset'
+    data = pd.read_csv('data/annotations.csv')
+    train_df, test_df = split_dataset(data, 0.2)
 
     train_loader = build_loaders(
-        dataframe=train_df, image_dir=IMAGE_DIR, batch_size=batch_size, num_workers=config['global']['num_workers'], mode="train")
-    test_loader = build_loaders(dataframe=test_df, image_dir=IMAGE_DIR,
-                                batch_size=batch_size, num_workers=config['global']['num_workers'], mode="test")
+        dataframe=train_df, image_dir=image_dir, batch_size=batch_size, num_workers=16, mode="train")
+    test_loader = build_loaders(dataframe=test_df, image_dir=image_dir,
+                                batch_size=batch_size, num_workers=16, mode="test")
 
-    model = FasterRCNN(num_classes=13).to(device)
+    model = SSD(num_classes=13).to(device)
+    # grcnn = torchvision.models.detection.transform.GeneralizedRCNNTransform(min_size=224, max_size=224, image_mean=[0.485, 0.456, 0.406], image_std=[0.229, 0.224, 0.225])
+    # model.transform = grcnn
 
     params = [p for p in model.parameters() if p.requires_grad]
-    optimizer = torch.optim.SGD(params, lr=args.lr,
+    optimizer = torch.optim.SGD(params, lr=0.005,
                             momentum=0.9, weight_decay=0.0005)
     # lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer,
     #                                            step_size=3,
     #                                            gamma=0.1)
     best_iou = 0
 
-    for epoch in range(1, args.epochs + 1):
+    for epoch in range(1,31):
         train(model, optimizer, train_loader, device, epoch, print_freq=50)
 
         mean_iou = evaluate(model, test_loader, device=device)
         if mean_iou > best_iou:
             best_iou = mean_iou
-            torch.save(model.state_dict(), f"checkpoints/{args.checkpoint_name}")
+            torch.save(model.state_dict(), "checkpoints/best.pth")
         print(f">>> Epoch: {epoch} - Mean IoU: {mean_iou} - Best IoU: {best_iou}")
 
 
 if __name__ == "__main__":
-
-    args = option()
-    config = load_config(args.config_path)
-    main(args, config)
+    main()
