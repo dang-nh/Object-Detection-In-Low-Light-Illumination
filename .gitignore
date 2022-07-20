@@ -132,3 +132,12 @@ test.txt
 cocoapi
 vision
 checkpoints
+archives/*
+data
+LOLdataset.zip
+pascalvoc-yolo.zip
+test.ipynb
+configs/_base_
+configs/MAET_yolo
+configs/ssd 
+configs/

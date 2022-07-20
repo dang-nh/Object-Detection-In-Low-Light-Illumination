@@ -1,177 +1,176 @@
-from albumentations.core.serialization import load
-from utils import build_loaders, split_dataset, option, load_config
-import pandas as pd
-import numpy as np
-import yaml
-import torch
-from tqdm import tqdm
-from models import FasterRCNN
-# from vision.references.detection.engine import evaluate
-import math
-import sys
+# exit()
+
+import argparse
+import copy
+import os
+import os.path as osp
 import time
+import warnings
 
+import mmcv
 import torch
-import torchvision.models.detection.mask_rcnn
-from utils.utils import MetricLogger, SmoothedValue, reduce_dict
-from utils.coco_eval import CocoEvaluator
-from utils.coco_utils import get_coco_api_from_dataset
+from mmcv import Config, DictAction
+from mmcv.runner import init_dist
+from mmcv.utils import get_git_hash
 
-IMAGE_DIR = 'Dataset'
-ANNOTATION_PATH = 'data/annotations.csv'
-
-def train(model, optimizer, data_loader, device, epoch, print_freq, scaler=None, args=None):    
-    model.train()
-
-    metric_logger = MetricLogger(delimiter="  ")
-    metric_logger.add_meter("lr", SmoothedValue(window_size=1, fmt="{value:.6f}"))
-    header = f"Epoch: [{epoch}]"
-
-    lr_scheduler = None
-    if epoch == 0:
-        warmup_factor = 1.0 / 1000
-        warmup_iters = min(1000, len(data_loader) - 1)
-
-        lr_scheduler = torch.optim.lr_scheduler.LinearLR(
-            optimizer, start_factor=warmup_factor, total_iters=warmup_iters
-        )
-
-    for images, targets in metric_logger.log_every(data_loader, print_freq, header):
-        images = list(image.to(device) for image in images)
-        targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
-        with torch.cuda.amp.autocast(enabled=scaler is not None):
-            loss_dict = model(images, targets)
-            losses = sum(loss for loss in loss_dict.values())
-
-        # reduce losses over all GPUs for logging purposes
-        loss_dict_reduced = reduce_dict(loss_dict)
-        losses_reduced = sum(loss for loss in loss_dict_reduced.values())
-
-        loss_value = losses_reduced.item()
-
-        if not math.isfinite(loss_value):
-            print(f"Loss is {loss_value}, stopping training")
-            print(loss_dict_reduced)
-            sys.exit(1)
-
-        optimizer.zero_grad()
-        if scaler is not None:
-            scaler.scale(losses).backward()
-            scaler.step(optimizer)
-            scaler.update()
-        else:
-            losses.backward()
-            optimizer.step()
-
-        if lr_scheduler is not None:
-            lr_scheduler.step()
-
-        metric_logger.update(loss=losses_reduced, **loss_dict_reduced)
-        metric_logger.update(lr=optimizer.param_groups[0]["lr"])
-
-        if epoch % 2 ==0:
-            state = {'epoch': epoch, 'state_dict': model.state_dict(),
-                'optimizer': optimizer.state_dict(), 'losslogger': metric_logger}
-            torch.save(state, f"checkpoints/latest_{args.model_name}.pth")
-
-    return metric_logger
-
-def _get_iou_types(model):
-    model_without_ddp = model
-    if isinstance(model, torch.nn.parallel.DistributedDataParallel):
-        model_without_ddp = model.module
-    iou_types = ["bbox"]
-    if isinstance(model_without_ddp, torchvision.models.detection.MaskRCNN):
-        iou_types.append("segm")
-    if isinstance(model_without_ddp, torchvision.models.detection.KeypointRCNN):
-        iou_types.append("keypoints")
-    return iou_types
-
-# @torch.inference_mode()
-def evaluate(model, data_loader, device):
-    n_threads = torch.get_num_threads()
-    # FIXME remove this and make paste_masks_in_image run on the GPU
-    torch.set_num_threads(1)
-    cpu_device = torch.device("cpu")
-    model.eval()
-    metric_logger = MetricLogger(delimiter="  ")
-    header = "Test:"
-
-    coco = get_coco_api_from_dataset(data_loader.dataset)
-    iou_types = _get_iou_types(model)
-    coco_evaluator = CocoEvaluator(coco, iou_types)
-
-    for images, targets in metric_logger.log_every(data_loader, 100, header):
-        images = list(img.to(device) for img in images)
-
-        if torch.cuda.is_available():
-            torch.cuda.synchronize()
-        model_time = time.time()
-        outputs = model(images)
-
-        outputs = [{k: v.to(cpu_device) for k, v in t.items()} for t in outputs]
-        model_time = time.time() - model_time
-
-        res = {target["image_id"].item(): output for target, output in zip(targets, outputs)}
-        evaluator_time = time.time()
-        coco_evaluator.update(res)
-        evaluator_time = time.time() - evaluator_time
-        metric_logger.update(model_time=model_time, evaluator_time=evaluator_time)
-
-    # gather the stats from all processes
-    metric_logger.synchronize_between_processes()
-    print("Averaged stats:", metric_logger)
-    coco_evaluator.synchronize_between_processes()
-
-    # accumulate predictions from all images
-    coco_evaluator.accumulate()
-    res = coco_evaluator.summarize()
-    print(f"results: {res}")
-    torch.set_num_threads(n_threads)
-    return sum(res) / len(res)
+from mmdet import __version__
+#from mmdet.apis import set_random_seed, train_detector, train_aet_detector
+from mmdet.apis import set_random_seed, train_detector
+from mmdet.datasets import build_dataset
+from mmdet.models import build_detector
+from mmdet.utils import collect_env, get_root_logger
 
 
-def main(args, config):
+def parse_args():
+    parser = argparse.ArgumentParser(description='Train a detector')
+    parser.add_argument('config', help='train config file path')
+    parser.add_argument('--work-dir', help='the dir to save logs and models')
+    parser.add_argument(
+        '--resume-from', help='the checkpoint file to resume from')
+    parser.add_argument(
+        '--no-validate',
+        action='store_true',
+        help='whether not to evaluate the checkpoint during training')
+    group_gpus = parser.add_mutually_exclusive_group()
+    group_gpus.add_argument(
+        '--gpus',
+        type=int,
+        help='number of gpus to use '
+        '(only applicable to non-distributed training)')
+    group_gpus.add_argument(
+        '--gpu-ids',
+        type=int,
+        nargs='+',
+        help='ids of gpus to use '
+        '(only applicable to non-distributed training)')
+    parser.add_argument('--seed', type=int, default=None, help='random seed')
+    parser.add_argument(
+        '--deterministic',
+        action='store_true',
+        help='whether to set deterministic options for CUDNN backend.')
+    parser.add_argument(
+        '--options',
+        nargs='+',
+        action=DictAction,
+        help='override some settings in the used config, the key-value pair '
+        'in xxx=yyy format will be merged into config file (deprecate), '
+        'change to --cfg-options instead.')
+    parser.add_argument(
+        '--cfg-options',
+        nargs='+',
+        action=DictAction,
+        help='override some settings in the used config, the key-value pair '
+        'in xxx=yyy format will be merged into config file.')
+    parser.add_argument(
+        '--launcher',
+        choices=['none', 'pytorch', 'slurm', 'mpi'],
+        default='none',
+        help='job launcher')
+    parser.add_argument('--local_rank', type=int, default=0)
+    args = parser.parse_args()
+    if 'LOCAL_RANK' not in os.environ:
+        os.environ['LOCAL_RANK'] = str(args.local_rank)
 
-    device = torch.device("cuda:" + str(args.gpu)
-                          if torch.cuda.is_available() else "cpu")
-    torch.cuda.set_device(args.gpu)
+    if args.options and args.cfg_options:
+        raise ValueError(
+            '--options and --cfg-options cannot be both '
+            'specified, --options is deprecated in favor of --cfg-options')
+    if args.options:
+        warnings.warn('--options is deprecated in favor of --cfg-options')
+        args.cfg_options = args.options
 
-    print(f">>>> Torch device is {torch.cuda.current_device()}")
-    print(f">>>> Preparing data....")
-
-    batch_size = args.batch_size
-
-    data = pd.read_csv(ANNOTATION_PATH)
-    train_df, test_df = split_dataset(data, args.train_size)
-
-    train_loader = build_loaders(
-        dataframe=train_df, image_dir=IMAGE_DIR, batch_size=batch_size, num_workers=config['global']['num_workers'], mode="train")
-    test_loader = build_loaders(dataframe=test_df, image_dir=IMAGE_DIR,
-                                batch_size=batch_size, num_workers=config['global']['num_workers'], mode="test")
-
-    model = FasterRCNN(num_classes=13).to(device)
-
-    params = [p for p in model.parameters() if p.requires_grad]
-    optimizer = torch.optim.SGD(params, lr=args.lr,
-                            momentum=0.9, weight_decay=0.0005)
-    # lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer,
-    #                                            step_size=3,
-    #                                            gamma=0.1)
-    best_iou = 0
-
-    for epoch in range(1, args.epochs + 1):
-        train(model, optimizer, train_loader, device, epoch, print_freq=50)
-
-        mean_iou = evaluate(model, test_loader, device=device)
-        if mean_iou > best_iou:
-            best_iou = mean_iou
-            torch.save(model.state_dict(), f"checkpoints/{args.checkpoint_name}")
-        print(f">>> Epoch: {epoch} - Mean IoU: {mean_iou} - Best IoU: {best_iou}")
+    return args
 
 
-if __name__ == "__main__":
+def main():
+    args = parse_args()
+    print(f"config: {args.config}")
+    cfg = Config.fromfile(args.config)
+    if args.cfg_options is not None:
+        cfg.merge_from_dict(args.cfg_options)
+    if cfg.get('custom_imports', None):
+        from mmcv.utils import import_modules_from_strings
+        import_modules_from_strings(**cfg['custom_imports'])
 
-    args = option()
-    config = load_config(args.config_path)
-    main(args, config)
+    if cfg.get('cudnn_benchmark', False):
+        torch.backends.cudnn.benchmark = True
+
+    if args.work_dir is not None:
+        cfg.work_dir = args.work_dir
+        cfg.work_dir = osp.join('./experiments',
+                                osp.splitext(osp.basename(args.config))[0])
+    if args.resume_from is not None:
+        cfg.resume_from = args.resume_from
+    if args.gpu_ids is not None:
+        cfg.gpu_ids = args.gpu_ids
+    else:
+        cfg.gpu_ids = range(1) if args.gpus is None else range(args.gpus)
+
+    # init distributed env first, since logger depends on the dist info.
+    if args.launcher == 'none':
+        distributed = False
+    else:
+        distributed = True
+        init_dist(args.launcher, **cfg.dist_params)
+
+    mmcv.mkdir_or_exist(osp.abspath(cfg.work_dir))
+
+    cfg.dump(osp.join(cfg.work_dir, osp.basename(args.config)))
+    
+    timestamp = time.strftime('%Y%m%d_%H%M%S', time.localtime())
+    log_file = osp.join(cfg.work_dir, f'{timestamp}.log')
+    logger = get_root_logger(log_file=log_file, log_level=cfg.log_level)
+
+    # init the meta dict to record some important information such as
+    # environment info and seed, which will be logged
+    meta = dict()
+    # log env info
+    env_info_dict = collect_env()
+    env_info = '\n'.join([(f'{k}: {v}') for k, v in env_info_dict.items()])
+    dash_line = '-' * 60 + '\n'
+    logger.info('Environment info:\n' + dash_line + env_info + '\n' +
+                dash_line)
+    meta['env_info'] = env_info
+    meta['config'] = cfg.pretty_text
+    # log some basic info
+    logger.info(f'Distributed training: {distributed}')
+    logger.info(f'Config:\n{cfg.pretty_text}')
+
+    # set random seeds
+    if args.seed is not None:
+        logger.info(f'Set random seed to {args.seed}, '
+                    f'deterministic: {args.deterministic}')
+        set_random_seed(args.seed, deterministic=args.deterministic)
+    cfg.seed = args.seed
+    meta['seed'] = args.seed
+    meta['exp_name'] = osp.basename(args.config)
+
+    model = build_detector(
+        # cfg.model, train_cfg=cfg.get('train_cfg'), test_cfg=cfg.get('test_cfg'))
+        cfg.model, train_cfg=cfg.train_cfg, test_cfg=cfg.test_cfg)
+
+    datasets = [build_dataset(cfg.data.train)]
+    if len(cfg.workflow) == 2:
+        val_dataset = copy.deepcopy(cfg.data.val)
+        val_dataset.pipeline = cfg.data.train.pipeline
+        datasets.append(build_dataset(val_dataset))
+    if cfg.checkpoint_config is not None:
+        # save mmdet version, config file content and class names in
+        # checkpoints as meta data
+        cfg.checkpoint_config.meta = dict(
+            mmdet_version=__version__ + get_git_hash()[:7],
+            CLASSES=datasets[0].CLASSES)
+    # add an attribute for visualization convenience
+    model.CLASSES = datasets[0].CLASSES
+    train_detector(
+        model,
+        datasets,
+        cfg,
+        distributed=distributed,
+        validate=(not args.no_validate),
+        timestamp=timestamp,
+        meta=meta)
+
+
+if __name__ == '__main__':
+    main()

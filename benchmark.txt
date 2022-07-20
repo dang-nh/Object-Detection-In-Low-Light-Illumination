@@ -1,1 +1,0 @@
-FasterRCNN-ResNet50-FPN-Non-Image-Processing: 0.45 (IOU)
