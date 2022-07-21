@@ -38,7 +38,6 @@ pip install -r requirements.txt
 ├── infer.py # inference code
 ├── train.py # training code
 ├── test.py # testing code
-├── dataloader.py
 ```
 ## Experiment Result
 
