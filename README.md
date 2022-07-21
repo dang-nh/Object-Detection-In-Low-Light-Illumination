@@ -28,6 +28,7 @@ cd "your project path"
 pip install -r requirements.txt
 ```
 **Step-2:** Download checkpoint and config file from [goole drive](https://drive.google.com/drive/folders/1nz7RRy5v29nU_TwES50Z1BqfOwmtV1oi?usp=sharing)
+
 **Step-3:** Put checkpoint and config file to "checkpoints" folder and "config" folder like below folder structure
 ```
 ├── configs
