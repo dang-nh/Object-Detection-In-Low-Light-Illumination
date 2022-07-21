@@ -39,7 +39,6 @@ pip install -r requirements.txt
 ├── test.py # testing code
 ├── dataloader.py
 ```
-
 ## Experiment Result
 
 | class     | gts  | dets | recall | ap    |
@@ -63,4 +62,5 @@ Infer model with a set of image
 ```
 python3 infer.py --input_dir [input directory path] --output_dir [output directory path] --checkpoint checkpoints/best_mAP_epoch_43.pth --cfg configs/yolov3_only_image_process.py
 ```
-**The code is largely borrow from mmdetection and unprocess, Thanks to their wonderful works~**
+
+**The code is largely borrow from mmdetection and unprocess, Thanks to their wonderful works**
