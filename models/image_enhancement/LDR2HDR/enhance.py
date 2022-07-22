@@ -11,13 +11,6 @@ from skimage import io
 def HDR(path):
     img = cv2.imread(path)
 
-    # if len(img.shape) == 3:
-    #     _, _, channels = img.shape
-    #     if channels == 4:
-    #         img = img[:,:,0:3]
-    # else:
-    #     img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-
     img = img.astype(np.float32)
 
     S = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)/255.0
@@ -25,17 +18,28 @@ def HDR(path):
     # L = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)[:,:,0]
     img = 1.0*img/255
 
+    # Comppute the illumination map
     I = cv2.GaussianBlur(S, (3, 3), 0)
     mI = np.mean(I)
+
+    # Compute the reflectance map by apply the Retinex theory
     R = np.log(S+1e-20) - np.log(I+1e-20)
     R_eh = SRS(R, I)
 
-    v_s = [0.2, (mI+0.2)/2, mI, (mI+0.8)/2, 0.8]
+    # Define 5 virtual exposure value vEV
+    v1 = 0.2
+    v3 = mI
+    v5 = 0.8
+    v2 = (mI+0.2)/2
+    v4 = (mI+0.8)/2
 
-    I_vts = VIG(I, 1.0-I, v_s)
-    L_eh = tone_production(R_eh, I_vts)
+    vEVs = [v1, v2, v3, v4, v5]
+
+    I_inv = 1.0 - I
+    I_virtuals = VIG(I, I_inv, vEVs)
+    L_eh = tone_production(R_eh, I_virtuals)
     
-    ratio = np.clip(L_eh/ S, 0, 3)
+    ratio = np.clip(L_eh/S, 0, 3)
     b,g,r = cv2.split(img)
 
     b_eh = ratio * b
@@ -55,23 +59,4 @@ def enhance(image_dir, out_dir):
             save_path = os.path.join(out_dir, img_name)
             out = HDR(img_path)
             cv2.imwrite(save_path, np.uint8(out*255))
-
-# if __name__ == '__main__':
-#     parser = argparse.ArgumentParser()
-
-# 	# Input Parameters
-
-#     parser.add_argument('--image_dir', type=str, default="/home/ubuntu/thanh.nt176874/dangnh/Object-Detection-In-Night-Vision/Dataset")
-#     # parser.add_argument('--filter', type=bool, default=True)
-#     parser.add_argument('--out_dir', type=str, default="/home/ubuntu/thanh.nt176874/dangnh/Object-Detection-In-Night-Vision/data/data_enhancement/HDRv3")
-#     args = parser.parse_args()
-
-#     list_img  = os.listdir(args.image_dir)
-
-#     for img in tqdm(list_img):
-
-#         path = os.path.join(args.image_dir, img)
-#         out = HDR(path)
-#         save_path = os.path.join(args.out_dir, img)
-#         cv2.imwrite(save_path, np.uint8(out*255))
 
