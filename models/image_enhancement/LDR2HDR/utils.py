@@ -14,14 +14,14 @@ def SRS(r, i):
 
     return r_eh
 
-def VIG(i, i_inv, v_s):
+def VIG(i, i_inv, vEVs):
     i_inv /=np.max(i_inv)
     mI = np.mean(i)
     M = np.max(i)
     r = 1.0 - mI/M
-    fv_s = [r*( 1/(1+np.exp(-1.0*(v - mI))) - 0.5 ) for v in v_s]
+    f_vEVs = [r*( 1/(1+np.exp(-1.0*(v - mI))) - 0.5 ) for v in vEVs]
 
-    I_k = [(1 + fv) * (i + fv * i_inv) for fv in fv_s]
+    I_k = [(1 + fv) * (i + fv * i_inv) for fv in f_vEVs]
 
     return I_k
 
